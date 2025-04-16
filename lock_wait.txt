@@ -1,0 +1,68 @@
+waiting_trx_id
+The ID of the waiting transaction.
+
+waiting_pid
+The processlist ID of the waiting transaction.
+
+waiting_query
+The statement that is waiting for the lock.
+
+blocking_trx_id
+The ID of the transaction that is blocking the waiting lock.
+
+blocking_pid
+The processlist ID of the blocking transaction.
+
+blocking_query
+The statement the blocking transaction is executing. This field reports NULL if the session that issued the blocking query becomes idle. 
+
+-- check blocking and waiting sessions
+SELECT
+  waiting_trx_id,
+  waiting_pid,
+  waiting_query,
+  blocking_trx_id,
+  blocking_pid,
+  blocking_query
+FROM sys.innodb_lock_waits;
+
+-- Hierarchical blocking information
+WITH RECURSIVE cte_connect_by AS (
+   SELECT 1 AS level, s.* FROM sys.innodb_lock_waits s
+   UNION ALL
+   SELECT level + 1 AS level, s.* 
+      FROM cte_connect_by r INNER JOIN sys.innodb_lock_waits s ON  r.blocking_pid = s.waiting_pid
+)
+SELECT waiting_trx_id, waiting_pid, waiting_query, blocking_trx_id, blocking_pid, blocking_query
+FROM cte_connect_by
+ORDER BY waiting_pid;
+
+
+https://dev.mysql.com/doc/refman/8.0/en/innodb-information-schema-examples.html#innodb-information-schema-examples-null-blocking-query
+https://mysql.wisborg.dk/2017/05/30/innodb-locks-analysis-why-is-blocking-query-null-and-how-to-find-more-information-about-the-blocking-transaction/
+
+-- substitute pid into the following query to find last 10 statements in the session
+SELECT THREAD_ID, SQL_TEXT
+ FROM performance_schema.events_statements_history
+WHERE THREAD_ID = (SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = 513)
+ORDER BY EVENT_ID;
+
+-- show transaction status
+show engine innodb status;
+
+-- check if any pending transactions
+select * from information_schema.innodb_trx;
+
+-- check individual lock
+SELECT engine_transaction_id,object_schema,object_name,index_name,lock_type,lock_mode,lock_status,lock_data
+  FROM performance_schema.data_locks;
+
+-- check requesting/blocking transactions
+SELECT * FROM performance_schema.data_lock_waits;
+
+
+-- check query history, performance_schema.events_statements_history shows last 10 statements
+select thread_id,sql_text from performance_schema.events_statements_history order by thread_id,timer_start;
+select * from performance_schema.events_statements_history where thread_id=67131 order by timer_start;
+-- if performance_schema_consumer_events_statements_history_long is ON, we can query performance_schema.events_statements_history for last 10000 statements. Default is OFF, change requires server restart
+select * from performance_schema.events_statements_history_long where thread_id=36 order by timer_start;
