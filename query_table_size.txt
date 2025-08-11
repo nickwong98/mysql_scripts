@@ -1,0 +1,15 @@
+SELECT 
+    CONCAT(table_schema, '.', table_name) AS 'Table',
+    table_rows AS 'Rows',
+    ROUND(data_length / (1024 * 1024), 4) AS 'Data Size (MB)',
+    ROUND(index_length / (1024 * 1024), 4) AS 'Index Size (MB)',
+    ROUND(data_free / (1024 * 1024), 4) AS 'Data Free Size (MB)',
+    ROUND((data_length + index_length + data_free) / (1024 * 1024), 4) AS 'Total Size (MB)'
+FROM information_schema.tables 
+WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+ORDER BY (data_length + index_length + data_free) DESC
+LIMIT 100;
+
+
+-- or this one
+SHOW TABLE STATUS FROM your_database_name;
