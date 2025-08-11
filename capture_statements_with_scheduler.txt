@@ -1,0 +1,80 @@
+CREATE SCHEMA IF NOT EXISTS `lock_analysis`;
+
+DROP EVENT IF EXISTS `lock_analysis`.`log_long_transactions`;
+DROP TABLE IF EXISTS `lock_analysis`.`locker_session_log`;
+
+
+CREATE TABLE IF NOT EXISTS `lock_analysis`.`locker_session_log` (
+  timer_start_ts DATETIME,
+  timer_start BIGINT,
+  thread_id BIGINT,
+  event_id BIGINT,
+  sql_text LONGTEXT
+);
+
+
+-- Tried capturing statement history for 4-10 mins pending transaction, but the trail size is too big (10G in 12h)
+DROP EVENT IF EXISTS `lock_analysis`.`log_long_transactions`;
+
+CREATE EVENT IF NOT EXISTS `lock_analysis`.`log_long_transactions`
+ON SCHEDULE EVERY 1 MINUTE
+COMMENT 'Save statement history if transaction has been pending for 7 to 10 mins'
+DO
+  INSERT INTO `lock_analysis`.`locker_session_log` (timer_start_ts, timer_start, thread_id, event_id, sql_text)
+  SELECT FROM_UNIXTIME(UNIX_TIMESTAMP() - gs.variable_value + hist.timer_start/1000000000000), hist.timer_start, hist.THREAD_ID, hist.EVENT_ID, hist.SQL_TEXT
+   FROM performance_schema.events_statements_history_long hist, performance_schema.global_status gs
+  WHERE gs.variable_name='Uptime'
+  AND hist.THREAD_ID IN (SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID IN (select trx_mysql_thread_id from information_schema.innodb_trx WHERE TIMESTAMPDIFF(SECOND, trx_started, NOW()) between 420 and 600))
+  ORDER BY hist.EVENT_ID;
+
+
+-- query locker_session_log
+select distinct timer_start_ts,timer_start/1000000000000,thread_id,event_id,sql_text from `lock_analysis`.`locker_session_log` where thread_id = (SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = 3699) order by event_id;
+
+
+-- session 1 (blocker)
+CREATE TABLE `lock_analysis`.`customer` (
+  `id` int NOT NULL,
+  `firstname` varchar(45) NOT NULL,
+  `lastname` varchar(45) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+insert into `lock_analysis`.`customer` values (1001,'Judith','Joe');
+insert into `lock_analysis`.`customer` values (1002,'Sean','Young');
+
+
+
+select * from `lock_analysis`.`customer` WHERE firstname='Sean';
+select * from `lock_analysis`.`customer` WHERE id=1003;
+-- START TRANSACTION;
+SET autocommit=0;
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE lastname='Joe';
+UPDATE `lock_analysis`.`customer` SET lastname='Blocker' WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE id=1001;
+select * from `lock_analysis`.`customer`;
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE firstname='Judith';
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE lastname='Young';
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE id=1002;
+select * from `lock_analysis`.`customer` WHERE id=1002;
+
+
+-- session 2
+-- START TRANSACTION;
+SET autocommit=0;
+UPDATE `lock_analysis`.`customer` SET lastname='Waiter' WHERE id=1002;
+
+
+-- check `lock_analysis`.`locker_session_log` table size
+SELECT 
+    table_name AS `Table`, 
+    round(((data_length + index_length) / 1024 / 1024), 2) `Size in MB` 
+FROM information_schema.TABLES 
+WHERE table_schema = "lock_analysis"
+    AND table_name = "locker_session_log";
+
